@@ -1,0 +1,5 @@
+# The add-on binds its Python sources by byte hash.
+*.py -text
+CODE-MANIFEST.json -text
+*.md -text
+COPYING -text
