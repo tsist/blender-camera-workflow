@@ -17,7 +17,7 @@ def main():
     args = parser.parse_args()
     try:
         if args.blender is not None:
-            os.environ[c.BLENDER_ENV] = str(args.blender.resolve(strict=True))
+            os.environ[c.BLENDER_ENV] = str(c.clean(args.blender.absolute()))
         request = c.read_json(args.request.resolve(strict=True))
         c.require(type(request) is dict and set(request) in (
             {"action", "params"}, {"action", "params", "adapter_manifest_sha"}

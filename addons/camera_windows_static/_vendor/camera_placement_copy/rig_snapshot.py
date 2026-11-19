@@ -209,7 +209,8 @@ def capture(bpy):
  helper_name=None
  """Return envelope{snapshot,evidence,scope}; does not open, save, sample, or edit."""
  need(isinstance(source_sha,str) and len(source_sha)==64,'Pinned source lineage required')
- need(tuple(bpy.app.version)==(5,2,1),'Pinned Blender version required')
+ need((tuple(bpy.app.version), bpy.app.build_hash) in (
+     ((5,2,1), b'9e2066aef7ef'), ((5,3,0), b'02f0899d78e3')), 'Pinned Blender build required')
  need(len(bpy.data.objects)<=128 and len(bpy.data.armatures)<=4,'Static rig context object/rig budget exceeded')
  need(sum(len(m.vertices) for m in bpy.data.meshes)<=10000 and sum(len(m.polygons) for m in bpy.data.meshes)<=12000,'Static rig context total geometry budget exceeded')
  native_sha=hashlib.sha256(Path(shared.__file__).read_bytes()).hexdigest()
@@ -224,7 +225,8 @@ def capture(bpy):
  need(len(bpy.data.scenes)==1,'One technical scene only');scene=bpy.context.scene
  need(scene.name=='NeutralTechnical','Fixed scene required')
  sequence=sequence_record(scene,shared)
- need(not getattr(scene,'compositing_node_group',None) and not getattr(scene,'node_tree',None),'Compositor unsupported')
+ need(not getattr(scene,'compositor_effects',()) and not getattr(scene,'compositing_node_group',None)
+      and not getattr(scene,'node_tree',None), 'Compositor unsupported')
  rig_context=capture_rig_context(bpy,shared,helper_name)
  blocks=inventory(bpy);ids={};references={};owners=tree_owners(bpy)
  allowed={'Armature','Object','Mesh','Camera','Action','Collection','Scene','Material','ShaderNodeTree','World','AreaLight','PointLight','SunLight','SpotLight'}
@@ -270,8 +272,13 @@ def capture(bpy):
   need(c.animation_data is None and not c.background_images,'Animated camera data/background images unsupported')
   cameras[c.name]={'properties':scalars(c,{'angle','angle_x','angle_y'}),'custom':custom(c,shared),'dof':{'properties':scalars(c.dof),'focus_object':identity(c.dof.focus_object)}}
  for layer in scene.view_layers:
-  def lc(c):return {'name':c.name,'collection':identity(c.collection),'properties':scalars(c),'children':[lc(x) for x in c.children]}
-  layers[layer.name]={'properties':scalars(layer),'collections':lc(layer.layer_collection),'objects':{o.name:{'hide':o.hide_get(view_layer=layer),'selected':o.select_get(view_layer=layer)} for o in layer.objects},'active':identity(layer.objects.active)}
+  def lc(c, exclude=()):
+   return {'name':c.name,'collection':identity(c.collection),
+           'properties':scalars(c,exclude),'children':[lc(x) for x in c.children]}
+  # On 5.3 the root's read-only visibility cache can flip after reopening
+  # a cross-version save. Authored flags and all child/object visibility stay checked.
+  root_exclude=('is_visible',) if tuple(bpy.app.version)==(5,3,0) else ()
+  layers[layer.name]={'properties':scalars(layer),'collections':lc(layer.layer_collection,root_exclude),'objects':{o.name:{'hide':o.hide_get(view_layer=layer),'selected':o.select_get(view_layer=layer)} for o in layer.objects},'active':identity(layer.objects.active)}
  worlds={w.name:{'properties':scalars(w),'custom':custom(w,shared),'tree':node_tree(w.node_tree,shared)} for w in bpy.data.worlds}
  rows=[]
  if hasattr(scene,'camera_live_shots'):

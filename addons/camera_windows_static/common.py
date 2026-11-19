@@ -8,11 +8,14 @@ import os
 from pathlib import Path
 import sys
 
+if __package__:
+    from .runtime_pins import RUNTIME_PINS
+else:
+    from runtime_pins import RUNTIME_PINS
+
 ROOT = Path(__file__).resolve().parent
 HOST = ROOT / "_support" / "blenderctl"
 BLENDER_ENV = "CAMERA_WORKFLOW_BLENDER"
-BINARY_SHA = "8f7a131ad8bc148edc218b334f07d92a57f5a357fa66d913b290537fd8353c06"
-PYTHON_SHA = "b51e9a425a5b703017ac6e8b827be2b3c3122a2683040a6215a1d70a3dd5af0b"
 LIMIT = 64 * 1024 * 1024
 
 def require(ok, message):
@@ -20,17 +23,28 @@ def require(ok, message):
         raise ValueError(message)
 
 
-def runtime_paths():
-    """Resolve the selected Blender installation in either the UI or its supervisor."""
+def qualified_runtime():
+    """Resolve and verify the selected Blender and its own bundled interpreter."""
     require(os.name == "nt", "The saved-copy transaction requires Windows")
-    bpy = sys.modules.get("bpy")
-    active = getattr(getattr(bpy, "app", None), "binary_path", "")
+    app = getattr(sys.modules.get("bpy"), "app", None)
+    active = getattr(app, "binary_path", "")
     configured = os.environ.get(BLENDER_ENV, "")
-    require(bool(active or configured), f"Set {BLENDER_ENV} to the official Blender 5.2.1 executable")
+    require(bool(active or configured), f"Set {BLENDER_ENV} to a qualified Blender executable")
     binary = clean(Path(active or configured))
     if active and configured:
         require(clean(Path(configured)).resolve() == binary.resolve(), "Configured Blender differs from the active application")
-    return binary, clean(binary.parent / "5.2/python/bin/python.exe")
+    fingerprint = digest(binary)
+    version = next((version for version, pins in RUNTIME_PINS.items() if pins["blender"] == fingerprint), None)
+    require(version is not None, "An exact qualified Windows Blender distribution is required")
+    pins = RUNTIME_PINS[version]
+    if app is not None:
+        require(tuple(app.version) == tuple(map(int, version.split(".")))
+                and app.build_hash == pins["build"].encode("ascii"), "Blender build differs")
+    python = clean(binary.parent / version.rsplit(".", 1)[0] / "python/bin/python.exe")
+    require(digest(python) == pins["python"], "Bundled Python identity differs")
+    if app is None:
+        require(clean(Path(sys.executable)).resolve() == python.resolve(), "Use the selected Blender's bundled Python")
+    return version, binary, python
 
 def canonical(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
@@ -117,16 +131,14 @@ def verify_package(expected_manifest_sha=None):
     actual = digest(manifest_path)
     if expected_manifest_sha is not None: require(actual == expected_manifest_sha, "Adapter code manifest changed")
     doc = read_json(manifest_path)
-    require(set(doc) == {"schema", "files", "runtime"} and doc["schema"] == 2, "Code manifest schema")
-    require(doc["runtime"] == {"blender": BINARY_SHA, "python": PYTHON_SHA}, "Runtime pins changed")
+    require(set(doc) == {"schema", "files", "runtime"} and doc["schema"] == 3, "Code manifest schema")
+    require(doc["runtime"] == RUNTIME_PINS, "Runtime pins changed")
     for name, wanted in doc["files"].items():
         require(not Path(name).is_absolute() and ".." not in Path(name).parts, "Invalid code member")
         require(digest(ROOT / name) == wanted, "Adapter code changed: " + name)
     actual_files = {p.relative_to(ROOT).as_posix() for p in ROOT.rglob("*.py") if "__pycache__" not in p.parts}
     require(set(doc["files"]) == actual_files, "Installed source inventory differs")
-    binary, python = runtime_paths()
-    require(digest(binary) == BINARY_SHA and digest(python) == PYTHON_SHA, "The qualified Windows Blender 5.2.1 build is required")
-    return actual, doc
+    return actual, doc, qualified_runtime()
 
 def load_native():
     vendor = ROOT / "_vendor"

@@ -1,6 +1,6 @@
 """Windows Camera Workflow with a bundled Camera Live provider."""
 bl_info = {"name": "Camera Workflow Windows", "author": "Camera Workflow contributors",
-           "version": (0, 8, 2), "blender": (5, 2, 1), "location": "3D View > Sidebar > Camera Live",
+           "version": (0, 8, 3), "blender": (5, 2, 1), "location": "3D View > Sidebar > Camera Live",
            "description": "Review, diagnose and edit a verified copy of a saved camera scene", "category": "Camera"}
 
 _owned_live = None

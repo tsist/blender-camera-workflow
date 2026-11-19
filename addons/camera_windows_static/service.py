@@ -28,14 +28,15 @@ def _guard(stack, path, wanted=None, renameable=False, parents=None):
     return guard
 
 def _code_guards(stack, expected=None):
-    manifest_sha, manifest = c.verify_package(expected)
+    manifest_sha, manifest, runtime = c.verify_package(expected)
     parents = set()
     _guard(stack, c.ROOT / "CODE-MANIFEST.json", manifest_sha, parents=parents)
     for name, sha in manifest["files"].items(): _guard(stack, c.ROOT / name, sha, parents=parents)
-    binary, python = c.runtime_paths()
-    _guard(stack, binary, c.BINARY_SHA, parents=parents)
-    _guard(stack, python, c.PYTHON_SHA, parents=parents)
-    return manifest_sha, parents
+    version, binary, python = runtime
+    pins = manifest["runtime"][version]
+    _guard(stack, binary, pins["blender"], parents=parents)
+    _guard(stack, python, pins["python"], parents=parents)
+    return manifest_sha, parents, runtime
 
 def _guard_descriptor(stack, item, parents):
     c.require(type(item) is dict and set(item) == {"file", "sha256"}, "Exact file descriptor required")
@@ -82,10 +83,12 @@ def cancel(job, check_sha):
         winner = _publish_decision(job, check_sha, "CANCEL")
         return {"accepted": winner == "CANCEL", "decision": winner, "scope": "COMMIT winner cannot be cancelled"}
 
-def _worker(stack, job, stage, manifest_sha, request_desc, check_desc=None, output_sha=None, check_sha=None):
+def _worker(stack, job, stage, manifest_sha, request_desc, runtime, check_desc=None, output_sha=None, check_sha=None):
     _, processes = c.load_host()
     _progress(job, stage)
-    cfg = {"schema": 1, "stage": stage, "job": str(job), "manifest_sha": manifest_sha, "request": request_desc}
+    version, binary, _ = runtime
+    cfg = {"schema": 1, "stage": stage, "job": str(job), "manifest_sha": manifest_sha,
+           "request": request_desc, "runtime": version}
     if check_desc is not None: cfg["check"] = check_desc
     if output_sha is not None: cfg["output_sha"] = output_sha
     cfg_path = job / (stage + "-config.json")
@@ -101,7 +104,6 @@ def _worker(stack, job, stage, manifest_sha, request_desc, check_desc=None, outp
         path = job / "profiles" / stage / folder
         path.mkdir(parents=True, exist_ok=False) if not path.exists() else c.clean(path, True)
         env[key] = str(path)
-    binary, _ = c.runtime_paths()
     command = [str(binary), "--background", "--factory-startup", "--disable-autoexec", "--offline-mode",
                "--python-exit-code", "17", "--python", str(c.ROOT / "worker.py"), "--", str(cfg_path), cfg_sha]
     with (job / (stage + ".log")).open("xb") as log:
@@ -141,7 +143,7 @@ def check(request, job):
     job.mkdir()
     fs, _ = c.load_host()
     with fs.PathLocks([job]), ExitStack() as stack:
-        manifest_sha, parents = _code_guards(stack)
+        manifest_sha, parents, runtime = _code_guards(stack)
         source = request["source"]
         _guard(stack, Path(source["file"]), source["sha256"], parents=parents)
         if request["version"] == 6:
@@ -151,11 +153,11 @@ def check(request, job):
         request_desc = descriptor(job / "request.json")
         _guard_descriptor(stack, request_desc, parents)
         try:
-            _worker(stack, job, "check", manifest_sha, request_desc)
+            _worker(stack, job, "check", manifest_sha, request_desc, runtime)
             state_desc, candidate_desc = descriptor(job / "state.json"), descriptor(job / "candidate.json")
             _guard_descriptor(stack, state_desc, parents)
             _guard_descriptor(stack, candidate_desc, parents)
-            receipt = {"schema": 1, "nonce": uuid.uuid4().hex, "manifest_sha": manifest_sha,
+            receipt = {"schema": 1, "nonce": uuid.uuid4().hex, "manifest_sha": manifest_sha, "runtime": runtime[0],
                        "request": request_desc, "state": state_desc, "candidate": candidate_desc,
                        "source": source, "job": str(job), "session_mode": "GUI_BOUND" if request["session"] is not None else "SAVED_DISK"}
             c.write_new(job / "check.json", receipt)
@@ -170,11 +172,13 @@ def check(request, job):
             raise
 
 def _read_check(stack, job, check_sha):
-    manifest_sha, parents = _code_guards(stack)
+    manifest_sha, parents, runtime = _code_guards(stack)
     _guard(stack, job / "check.json", check_sha, parents=parents)
     receipt = c.read_json(job / "check.json")
-    c.require(set(receipt) == {"schema", "nonce", "manifest_sha", "request", "state", "candidate", "source", "job", "session_mode"} and receipt["schema"] == 1, "Check receipt schema")
+    c.require(set(receipt) == {"schema", "nonce", "manifest_sha", "request", "state", "candidate",
+                              "source", "job", "session_mode", "runtime"} and receipt["schema"] == 1, "Check receipt schema")
     c.require(receipt["job"] == str(job) and receipt["manifest_sha"] == manifest_sha, "Check job/code binding differs")
+    c.require(receipt["runtime"] == runtime[0], "Check runtime binding differs")
     request = _guard_descriptor(stack, receipt["request"], parents)
     c.validate_request(request)
     _guard_descriptor(stack, receipt["state"], parents)
@@ -184,26 +188,26 @@ def _read_check(stack, job, check_sha):
     if request["version"] == 6:
         for resource in request["resources"]:
             _guard(stack, Path(resource["file"]), resource["sha256"], parents=parents)
-    return receipt, parents
+    return receipt, parents, runtime
 
 def apply(job, check_sha, on_stage=None):
     job = c.clean(job, True)
     fs, _ = c.load_host()
     with fs.PathLocks([job]), ExitStack() as stack:
-        receipt, parents = _read_check(stack, job, check_sha)
+        receipt, parents, runtime = _read_check(stack, job, check_sha)
         c.write_new(job / "apply-start.json", {"check_sha": check_sha, "pid": os.getpid(), "nonce": uuid.uuid4().hex})
         check_desc = {"file": str(job / "check.json"), "sha256": check_sha}
         committed = False
         try:
             _cancelled(job, check_sha)
-            applied = _worker(stack, job, "apply", receipt["manifest_sha"], receipt["request"], check_desc, check_sha=check_sha)
+            applied = _worker(stack, job, "apply", receipt["manifest_sha"], receipt["request"], runtime, check_desc, check_sha=check_sha)
             output_sha = applied["output_sha"]
             staging = _guard(stack, job / "staging.blend", output_sha, parents=parents)
             staging_identity = staging.identity()
             _progress(job, "SAVED_STAGING")
             if on_stage: on_stage("SAVED_STAGING", job, check_sha)
             _cancelled(job, check_sha)
-            cold_staging = _worker(stack, job, "cold_staging", receipt["manifest_sha"], receipt["request"], check_desc, output_sha, check_sha)
+            cold_staging = _worker(stack, job, "cold_staging", receipt["manifest_sha"], receipt["request"], runtime, check_desc, output_sha, check_sha)
             c.require(cold_staging.get("output_sha") == output_sha, "Staging output binding differs")
             if on_stage: on_stage("VERIFIED_STAGING", job, check_sha)
             _cancelled(job, check_sha)
@@ -221,7 +225,7 @@ def apply(job, check_sha, on_stage=None):
             final_guard = _guard(stack, job / "candidate.blend", output_sha, parents=parents)
             c.require(final_guard.identity() == staging_identity, "Final identity changed during reader handoff")
             if on_stage: on_stage("COMMITTED", job, check_sha)
-            final = _worker(stack, job, "cold_final", receipt["manifest_sha"], receipt["request"], check_desc, output_sha)
+            final = _worker(stack, job, "cold_final", receipt["manifest_sha"], receipt["request"], runtime, check_desc, output_sha)
             c.require(final.get("output_sha") == output_sha and final_guard.sha256() == output_sha, "Final output binding differs")
             evidence = {name: descriptor(job / name) for name in ("check.json", "request.json", "state.json", "candidate.json", "apply-worker.json", "cold_staging-worker.json", "cold_final-worker.json", "next-baseline.json")}
             result = {"status": "SUCCEEDED", "check_sha": check_sha, "output": {"file": str(job / "candidate.blend"), "sha256": output_sha},
@@ -247,7 +251,7 @@ def verified_result(job, terminal_sha=None):
         terminal = c.read_json(job / "terminal.json")
         c.require(terminal.get("status") == "SUCCEEDED" and terminal.get("committed") is True, "No verified successful result")
         c.require(set(terminal) == {"status", "check_sha", "output", "source", "manifest_sha", "evidence", "session_mode", "committed"}, "Exact terminal fields required")
-        receipt, parents = _read_check(stack, job, terminal["check_sha"])
+        receipt, parents, _ = _read_check(stack, job, terminal["check_sha"])
         c.require(terminal["source"] == receipt["source"] and terminal["manifest_sha"] == receipt["manifest_sha"], "Terminal binding differs")
         c.require(terminal["session_mode"] == receipt["session_mode"] and _decision(job, terminal["check_sha"]) == "COMMIT", "Commit/session binding differs")
         c.require(terminal["output"]["file"] == str(job / "candidate.blend"), "Final candidate path differs")
@@ -279,12 +283,12 @@ def diagnose(request, job):
     job.mkdir(exist_ok=False)
     fs, _ = c.load_host()
     with fs.PathLocks([job]), ExitStack() as stack:
-        manifest_sha, parents = _code_guards(stack)
+        manifest_sha, parents, runtime = _code_guards(stack)
         for item in [request["source"], *request["resources"]]:
             _guard(stack, Path(item["file"]), item["sha256"], parents=parents)
         request_desc = c.write_new(job / "request.json", request)
         _guard_descriptor(stack, request_desc, parents)
-        observed = _worker(stack, job, "diagnose", manifest_sha, request_desc)
+        observed = _worker(stack, job, "diagnose", manifest_sha, request_desc, runtime)
         report = observed["report"]
         _guard_descriptor(stack, report, parents)
         doc = c.load_descriptor(report)

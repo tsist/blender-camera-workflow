@@ -5,13 +5,11 @@ import json
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
+from camera_windows_static.runtime_pins import RUNTIME_PINS
+
 
 PACKAGE = Path(__file__).resolve().parent / "camera_windows_static"
 MANIFEST = PACKAGE / "CODE-MANIFEST.json"
-RUNTIME = {
-    "blender": "8f7a131ad8bc148edc218b334f07d92a57f5a357fa66d913b290537fd8353c06",
-    "python": "b51e9a425a5b703017ac6e8b827be2b3c3122a2683040a6215a1d70a3dd5af0b",
-}
 
 
 def main():
@@ -24,9 +22,9 @@ def main():
         if "__pycache__" not in file.parts
     }
     expected = {
-        "schema": 2,
+        "schema": 3,
         "files": {name: sha256(content).hexdigest() for name, content in sources.items()},
-        "runtime": RUNTIME,
+        "runtime": RUNTIME_PINS,
     }
     manifest = MANIFEST.read_bytes()
     if json.loads(manifest) != expected:

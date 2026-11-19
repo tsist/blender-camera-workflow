@@ -233,6 +233,8 @@ def _qualify(bpy, request, output=False):
     for existing_scene in bpy.data.scenes:
         c.require(existing_scene.sequence_editor is None or len(existing_scene.sequence_editor.strips_all) == 0,
                   "UNSUPPORTED: Nonempty VSE requires consumer timing synchronization: " + existing_scene.name)
+        c.require(not getattr(existing_scene, "compositor_effects", ()),
+                  "UNSUPPORTED: Compositor effects require a stack-aware retiming witness: " + existing_scene.name)
     def descendants(root):
         result = {root}
         for child in root.children:

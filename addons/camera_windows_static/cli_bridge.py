@@ -3,12 +3,15 @@ import json
 import os
 from pathlib import Path
 import subprocess
-
-import bpy
+import sys
 
 root = Path(__file__).resolve().parent
-blender = Path(bpy.app.binary_path).resolve(strict=True)
-python = blender.parent / "5.2/python/bin/python.exe"
+sys.path.insert(0, str(root.parent))
+from camera_windows_static import common
+
+if common.ROOT != root:
+    raise ValueError("Camera bridge loaded a different adapter")
+_, _, (_, blender, python) = common.verify_package()
 folder = Path(job_directory)
 request = folder / "camera-bridge-input.json"
 with request.open("x", encoding="utf8") as handle:

@@ -121,14 +121,13 @@ def _capture_focus(context, shot, helper, new_start, locked_frames, name):
 def _launch(action, params):
     global _timer
     c.require(_idle(), "A Windows static operation is already owned")
-    manifest_sha, _ = c.verify_package()
+    manifest_sha, _, (_, blender, python) = c.verify_package()
     control = Path(params["job"]).parent / (".camera-control-" + uuid.uuid4().hex)
     control.mkdir()
     action_file = control / "action.json"
     c.write_new(action_file, {"action": action, "params": params, "manifest_sha": manifest_sha})
     nonce = uuid.uuid4().hex
     gate = control / "launch-gate.json"
-    blender, python = c.runtime_paths()
     env = dict(os.environ, **{c.BLENDER_ENV: str(blender)})
     command = [str(python), "-I", "-B", str(c.ROOT / "entry.py"), str(action_file), c.digest(action_file), str(gate), nonce]
     _, processes = c.load_host()

@@ -67,7 +67,7 @@ def run():
                 and config["schema"] == 1, "Config schema differs")
         stage = config.get("stage")
         require(stage in STAGES, "Unknown worker stage")
-        config_keys = {"schema", "stage", "job", "manifest_sha", "request"}
+        config_keys = {"schema", "stage", "job", "manifest_sha", "request", "runtime"}
         if stage not in {"check", "diagnose"}:
             config_keys.add("check")
         if stage in {"cold_staging", "cold_final"}:
@@ -77,12 +77,9 @@ def run():
         require(job.is_dir(), "Job directory missing")
         manifest_sha = config.get("manifest_sha")
         require(type(manifest_sha) is str and SHA.fullmatch(manifest_sha), "Invalid package manifest SHA")
-        common.verify_package(manifest_sha)
         require(os.name == "nt" and bpy.app.background, "Windows background worker required")
-        require(tuple(bpy.app.version) == (5, 2, 1)
-                and bpy.app.build_hash == b"9e2066aef7ef", "Blender build differs")
-        require(common.digest(Path(bpy.app.binary_path)) == common.BINARY_SHA,
-                "Windows binary identity differs")
+        _, _, runtime = common.verify_package(manifest_sha)
+        require(runtime[0] == config["runtime"], "Worker runtime binding differs")
         require(all(flag in sys.argv for flag in
                     ("--background", "--factory-startup", "--disable-autoexec", "--offline-mode")),
                 "Required startup isolation flags missing")
@@ -167,12 +164,13 @@ def run():
 
         require("check" in config and "request" in config, "Stage CHECK receipt missing")
         receipt = descriptor(config["check"])
-        require(set(receipt) == {"schema", "nonce", "manifest_sha", "request", "state", "candidate",
+        require(set(receipt) == {"schema", "nonce", "manifest_sha", "request", "state", "candidate", "runtime",
                                  "source", "job", "session_mode"}
                 and type(receipt["schema"]) is int and receipt["schema"] == 1,
                 "Exact CHECK receipt fields required")
         require(absolute(receipt["job"]).resolve() == job.resolve(), "Receipt job differs")
         require(receipt.get("manifest_sha") == manifest_sha, "Receipt package identity differs")
+        require(receipt["runtime"] == runtime[0], "Receipt runtime binding differs")
         require(type(receipt.get("nonce")) is str and bool(receipt["nonce"]), "Receipt nonce missing")
         require(config["request"] == receipt["request"], "Config/CHECK request descriptor differs")
         request = common.validate_request(descriptor(receipt.get("request")))
