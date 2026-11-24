@@ -1,0 +1,5 @@
+interface:
+  display_name: "Blender Camera Workflow"
+  short_description: "排定镜头表、架设机位焦段与运镜焦点、组织候选 A/B 实体预演并协同剪辑切点"
+  default_prompt: "先用 blenderctl discover --product camera 查清可用入口，在独立工作副本上排定镜头表、架设机位并做实体预演与冷重开验收。"
+  default_prompt: "Use $blender-camera-workflow for this Blender workflow task."
