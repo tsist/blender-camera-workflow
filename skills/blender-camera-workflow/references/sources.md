@@ -15,7 +15,7 @@
 
 查看当前宿主支持的精确版本、动作入口与实测回执，先运行 `./blenderctl.ps1 discover --product camera`，并按需查阅以下项目文档与审计目录：
 
-- 镜头表、切点改时与现场预演总交接文档：`shot-timing.md`
+- 镜头表、切点改时与现场预演总交接文档：[shot-timing.md](../../../../docs/cli/workflows/shot-timing.md)
 - 相机部门动作清单与范围说明：`work/audit/<batch>/`
 - 原生副本事务、构图诊断与同窗复开回执：`work/audit/<batch>/`、`work/audit/<batch>/`
 - 公共镜头表读写、切点移动、来源切换与候选采用回执：`work/audit/<batch>/`、`work/audit/<batch>/`、`work/audit/<batch>/`

@@ -1,0 +1,13 @@
+{
+  "camera_copy/__init__.py": "cf71afd081a9ca37d24f3e8e1be10bac84d66795cbded88d8828859233efb341",
+  "camera_copy/__main__.py": "8e9fdd28446086a01fc834c6a788e38c9069bbd56fdd8bf3503926a0cc961cce",
+  "camera_copy/domain.py": "b0a803a94c182c3e7db3f10d691c9960a711f8166bd91c544b50b6acbd4305ee",
+  "camera_copy/worker.py": "dbd263f4e969b8f2ae4a9613e3cee9249cd2ffc7cc0a9101200a670a4736787f",
+  "camera_live_rebuilt/__init__.py": "5f6495e6e273b2774e5671026cf02e4b0f5aedc0830a7a61aca48f5ef0b0f7ec",
+  "camera_live_rebuilt/adapter.py": "ff067c127013a3c55b04e6acc99d223fb9c748d20233d410a1ccdc205b126bff",
+  "camera_live_rebuilt/authoring.py": "fadb0136a0fb87328f96067626ed447beb48eabde952eb8a251bce7e9dafbdd7",
+  "camera_live_rebuilt/candidate_model.py": "4291a88a433a76834a70f85301421a91d3212fd98d2a702ef4b802b395dbdeae",
+  "camera_live_rebuilt/core.py": "548d6594419037c215be8242bb7764a40dc3a7639b24a23cf187ddcd47d3edda",
+  "camera_live_rebuilt/ui_layout.py": "1c7cba3214a659f6dd8b5c00fa0eb560fe144126cfa3e29a6d885fe169a780d3",
+  "camera_live_rebuilt/workbench.py": "10c06a407cf75fb0d9757e1b4ae4c02e9c4b7261f71647c5871851052fd88405"
+}

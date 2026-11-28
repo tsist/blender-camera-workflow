@@ -73,8 +73,11 @@ def main():
     cfg=json.loads(raw);job=Path(cfg['job'])
     import bpy
     if config_path!=job/'job.json' or stage not in ('apply','cold_staging','cold_final'):raise ValueError('Invalid child request')
-    if not bpy.app.background or bpy.data.filepath or tuple(bpy.app.version)!=(5,2,1):raise ValueError('Fresh Blender 5.2.1 required')
-    if '--factory-startup' not in sys.argv or '--disable-autoexec' not in sys.argv:raise ValueError('Safe flags required')
+    if (sys.platform != 'win32' or not bpy.app.background or bpy.data.filepath
+            or tuple(bpy.app.version) < (5, 3, 0)):
+        raise ValueError('Fresh Windows Blender 5.3.0 or later is required')
+    if bpy.app.online_access or not {'--factory-startup', '--disable-autoexec', '--offline-mode'} <= set(sys.argv):
+        raise ValueError('Offline factory startup required')
     for rel,expected in cfg['package'].items():
         if Path(rel).is_absolute() or '..' in Path(rel).parts or hashlib.sha256((job/rel).read_bytes()).hexdigest()!=expected:raise ValueError('Package changed')
     addon,model,d=load_pinned(job,cfg['package'])
@@ -89,18 +92,35 @@ def main():
     try:
         if bpy.ops.wm.open_mainfile(filepath=str(path),load_ui=False,use_scripts=False)!={'FINISHED'}:raise ValueError('Open failed')
         d.reject_unpreserved(bpy)
+        textures = {}
+        for image in bpy.data.images:
+            if image.source != 'FILE':
+                continue
+            if image.packed_file:
+                textures[image.name] = hashlib.sha256(image.packed_file.data).hexdigest()
+                continue
+            # The input snapshot lives in the job. Resolve relative FILE images against the original.
+            source_dir = cfg['source_directory'] if stage == 'apply' else str(path.parent)
+            texture = Path(bpy.path.abspath(image.filepath, start=source_dir)).resolve(strict=True)
+            if not texture.is_file():
+                raise ValueError('Missing texture: ' + str(texture))
+            with texture.open('rb') as stream:
+                textures[image.name] = hashlib.file_digest(stream, 'sha256').hexdigest()
+            if stage == 'apply':
+                image.filepath = bpy.path.relpath(str(texture), start=str(job))
+        
         scene=bpy.data.scenes.get(doc['scene'])
         if scene is None:raise ValueError('Scene absent')
         reject_scene_animation(scene)
         sys.modules['camera_live_rebuilt.adapter'].validate_camera_markers(scene.timeline_markers)
         catalog=sorted(o.name for o in scene.objects if o.type=='CAMERA')
         if catalog!=doc['catalog'] or scene.camera_live_source!='SEQUENCE':raise ValueError('Catalog/mode differs')
-        before={'protected':d.protected(bpy,scene),'extras':extras(scene),'main_ids':main_id_roster(bpy)}
+        before={'protected':d.protected(bpy,scene),'extras':extras(scene),'main_ids':main_id_roster(bpy),'textures':textures}
         if stage=='apply':
             if d.rows_of(scene)!=doc['base_rows']:raise ValueError('Saved baseline differs')
             apply_rows(scene,doc['rows'])
             if d.rows_of(scene)!=doc['rows']:raise ValueError('Applied rows differ')
-            after={'protected':d.protected(bpy,scene),'extras':extras(scene),'main_ids':main_id_roster(bpy)}
+            after={'protected':d.protected(bpy,scene),'extras':extras(scene),'main_ids':main_id_roster(bpy),'textures':textures}
             if d.fingerprint(before)!=d.fingerprint(after):raise ValueError('Selected protected fields changed')
             output=job/'staging.blend'
             if output.exists() or output.is_symlink():raise ValueError('Staging exists')

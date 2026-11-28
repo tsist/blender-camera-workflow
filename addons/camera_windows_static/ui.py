@@ -17,11 +17,48 @@ _slot = {"status": "Idle", "process": None, "thread": None, "done": None, "actio
 _items = []
 _cut_items = []
 
+_ERROR_LABELS = (
+    ("A clean saved GUI scene", "请保存当前工程，再核验镜头副本"),
+    ("Save the current scene", "请保存当前工程，再检查镜头"),
+    ("Save the source", "请保存当前工程后继续"),
+    ("Stop playback", "请暂停播放后继续"),
+    ("Adjacent right shot", "请在镜头表中添加相邻的后一镜"),
+    ("A saved adjacent shot", "请保存含相邻两镜的镜头表"),
+    ("Saved shot sequence", "请保存含镜头表的工程"),
+    ("Release the previous CHECK", "请先生成或取消上一次核验"),
+    ("Dialog source/window changed", "工程或窗口已切换，请重新打开此面板"),
+    ("Scene changed while", "对话框打开期间工程已改变，请重新载入参数"),
+    ("Scene changed during", "场景已改变，请保存后重新核验"),
+    ("Session changed during", "场景已改变，请保存后重新核验"),
+    ("Saved source", "保存的源工程已改变，请重新核验"),
+    ("Current scene differs", "当前场景与核验时不同，请重新核验"),
+    ("CHECK belongs", "核验属于另一个窗口或场景"),
+    ("A completed framing report", "请先完成构图诊断"),
+    ("Specification belongs", "构图预设对应的是另一个工程或场景"),
+    ("Case absent", "构图预设中没有当前诊断方案"),
+    ("The suggestion needs", "构图建议需要唯一使用该相机的已保存镜头"),
+    ("A Windows static operation", "另一个镜头核验任务还在运行"),
+    ("Supervisor failed", "后台核验失败，请查看任务日志"),
+    ("Verified result changed", "已核验副本发生变化，请重新核验"),
+    ("Open failed", "无法打开已核验副本"),
+)
+
+
+def _display_problem(error):
+    message = str(error)
+    translated = next((label for prefix, label in _ERROR_LABELS if message.startswith(prefix)), None)
+    if translated:
+        return translated
+    if any("\u4e00" <= char <= "\u9fff" for char in message):
+        return message
+    return "镜头核验未完成，请检查镜头表与当前工程，详情见任务记录"
+
+
 def _names(self, context):
-    return _items or [("NONE", "No saved shots", "")]
+    return _items or [("NONE", "没有已保存的镜头", "")]
 
 def _cut_names(self, context):
-    return _cut_items or [("NONE", "No adjacent shots", "")]
+    return _cut_items or [("NONE", "没有相邻镜头", "")]
 
 def _capture_cut(context, left, cut, name):
     c.require(not bpy.app.background and bpy.data.filepath and not bpy.data.is_dirty, "Save the current scene before CHECK")
@@ -182,11 +219,11 @@ def _observe():
             audit = doc["audits"][name]
             baseline_count = len(audit["baseline"]["issues"])
             remaining = len(audit["recommendation"]["validation"]["issues"])
-            summary = f"{name}: {baseline_count} issues, {remaining} remaining"
+            summary = f"检查出 {baseline_count} 项，调整后剩 {remaining} 项"
             if audit["conflict"]:
-                summary += " (locks conflict)"
+                summary += "，存在锁定冲突"
             elif audit["recommendation"]["improves"]:
-                summary += " (copy suggestion available)"
+                summary += "，可核验改进方案"
             _slot.update(diagnosis=result["report"], framing_summary=summary, status="Framing diagnosed")
         else:
             if result.get("status") == "CANCELLED":
@@ -205,10 +242,10 @@ def _observe():
 
 class CAMERA_WINDOWS_OT_diagnose(bpy.types.Operator):
     bl_idname = "camera_windows_static.diagnose"
-    bl_label = "Diagnose Saved Framing"
-    spec_file: StringProperty(name="Framing specification", subtype="FILE_PATH")
-    case_name: StringProperty(name="Case to review", default="search")
-    job_parent: StringProperty(name="New job parent", subtype="DIR_PATH")
+    bl_label = "诊断已保存构图"
+    spec_file: StringProperty(name="构图诊断预设", subtype="FILE_PATH")
+    case_name: StringProperty(name="检查方案", default="search")
+    job_parent: StringProperty(name="任务输出目录", subtype="DIR_PATH")
 
     @classmethod
     def poll(cls, context):
@@ -221,9 +258,28 @@ class CAMERA_WINDOWS_OT_diagnose(bpy.types.Operator):
     def execute(self, context):
         try:
             c.require(self.poll(context) and not bpy.data.is_dirty and not context.screen.is_animation_playing,
-                      "Save the source and stop playback before diagnosing")
-            request = framing_ops.validate(c.read_json(self.spec_file))
+                      "请保存工程并停止播放后再诊断")
             source = Path(bpy.data.filepath)
+            if self.spec_file:
+                request = c.read_json(bpy.path.abspath(self.spec_file))
+            else:
+                from .artist_ui import _camera
+
+                scene = context.scene
+                camera = _camera(context)
+                settings = scene.camera_artist_ui
+                target = settings.subject or context.active_object
+                c.require(camera and target and target.type == "MESH" and target.name in scene.objects,
+                          "请选择场景中的网格主体和相机")
+                resources = {Path(bpy.path.abspath(image.filepath)).resolve()
+                             for image in bpy.data.images if image.source == "FILE" and not image.packed_file}
+                request = {
+                    "source": c.descriptor(source), "scene": scene.name,
+                    "specs": {self.case_name: {"camera": camera.name, "frames": [scene.frame_current],
+                              "subjects": [{"name": "主体", "objects": [target.name]}]}},
+                    "resources": [c.descriptor(path) for path in sorted(resources)],
+                }
+            request = framing_ops.validate(request)
             c.require(Path(request["source"]["file"]).resolve() == source.resolve()
                       and request["source"]["sha256"] == c.digest(source)
                       and request["scene"] == context.scene.name, "Specification belongs to a different saved scene")
@@ -233,13 +289,13 @@ class CAMERA_WINDOWS_OT_diagnose(bpy.types.Operator):
             _launch("diagnose", {"request": request, "job": str(job)})
             return {"FINISHED"}
         except Exception as exc:
-            self.report({"ERROR"}, str(exc))
+            self.report({"ERROR"}, _display_problem(exc))
             return {"CANCELLED"}
 
 
 class CAMERA_WINDOWS_OT_check_framing(bpy.types.Operator):
     bl_idname = "camera_windows_static.check_framing"
-    bl_label = "Check Framing Suggestion Copy"
+    bl_label = "核验构图建议"
 
     @classmethod
     def poll(cls, context):
@@ -265,19 +321,19 @@ class CAMERA_WINDOWS_OT_check_framing(bpy.types.Operator):
             _launch("check", {"request": request, "job": str(job)})
             return {"FINISHED"}
         except Exception as exc:
-            self.report({"ERROR"}, str(exc))
+            self.report({"ERROR"}, _display_problem(exc))
             return {"CANCELLED"}
 
 
 class CAMERA_WINDOWS_OT_check(bpy.types.Operator):
     bl_idname = "camera_windows_static.check"
-    bl_label = "Windows Static Camera Copy"
+    bl_label = "检查静态机位"
     bl_options = {"REGISTER"}
-    shot: EnumProperty(name="Shot", items=_names)
-    lens: FloatProperty(name="Focal length (mm)", default=50.0, min=1.0, max=500.0)
-    local_offset: FloatVectorProperty(name="Camera right / up / back", size=3, default=(0, 0, 0))
-    candidate_name: StringProperty(name="Candidate", default="Windows static alternative")
-    job_parent: StringProperty(name="New job parent", subtype="DIR_PATH")
+    shot: EnumProperty(name="镜头", items=_names)
+    lens: FloatProperty(name="焦距（毫米）", default=50.0, min=1.0, max=500.0)
+    local_offset: FloatVectorProperty(name="机位偏移（右／上／后）", size=3, default=(0, 0, 0))
+    candidate_name: StringProperty(name="候选方案", default="静态机位候选")
+    job_parent: StringProperty(name="任务输出目录", subtype="DIR_PATH")
 
     @classmethod
     def poll(cls, context):
@@ -286,14 +342,14 @@ class CAMERA_WINDOWS_OT_check(bpy.types.Operator):
     def invoke(self, context, event):
         global _items
         if bpy.data.is_dirty:
-            self.report({"ERROR"}, "Save the source before opening this dialog")
+            self.report({"ERROR"}, "请先保存当前工程")
             return {"CANCELLED"}
         _, _, native = c.load_native()
         self._origin = (context.window.as_pointer(), context.scene.as_pointer(), bpy.data.filepath, c.digest(Path(bpy.data.filepath)))
         self._origin_state = c.canonical_state(native.state(bpy, context.scene))
-        _items = [(row.name, row.name, "Camera: " + row.camera.name) for row in context.scene.camera_live_shots if row.camera]
+        _items = [(row.name, row.name, "相机：" + row.camera.name) for row in context.scene.camera_live_shots if row.camera]
         if not _items:
-            self.report({"ERROR"}, "A saved shot sequence is required")
+            self.report({"ERROR"}, "请先保存包含镜头表的工程")
             return {"CANCELLED"}
         self.shot = "B_Responds" if any(row[0] == "B_Responds" for row in _items) else _items[0][0]
         self.lens = next(row.camera.data.lens for row in context.scene.camera_live_shots if row.name == self.shot)
@@ -307,9 +363,9 @@ class CAMERA_WINDOWS_OT_check(bpy.types.Operator):
         layout.prop(self, "local_offset")
         layout.prop(self, "candidate_name")
         layout.prop(self, "job_parent")
-        layout.label(text="Static camera: affects all frames using this camera.")
-        layout.label(text="CHECK captures the clean saved scene. Create saves a new copy.")
-        layout.label(text="Animated/shared/DOF targets remain subject to the original guards.")
+        layout.label(text="静态机位会影响这台相机覆盖的所有帧。")
+        layout.label(text="检查读取已保存场景，生成后将另存副本。")
+        layout.label(text="动画、共享相机及景深目标均会经过核验。")
 
     def execute(self, context):
         try:
@@ -326,17 +382,17 @@ class CAMERA_WINDOWS_OT_check(bpy.types.Operator):
             _launch("check", {"request": request, "job": str(job)})
             return {"FINISHED"}
         except Exception as exc:
-            self.report({"ERROR"}, str(exc))
+            self.report({"ERROR"}, _display_problem(exc))
             return {"CANCELLED"}
 
 class CAMERA_WINDOWS_OT_cut_check(bpy.types.Operator):
     bl_idname = "camera_windows_static.cut_check"
-    bl_label = "Windows Adjacent Cut Copy"
+    bl_label = "检查相邻切点"
     bl_options = {"REGISTER"}
-    left: EnumProperty(name="Left shot", items=_cut_names)
-    left_last: IntProperty(name="Last frame of left shot", default=108)
-    candidate_name: StringProperty(name="Candidate", default="Earlier B response")
-    job_parent: StringProperty(name="New job parent", subtype="DIR_PATH")
+    left: EnumProperty(name="前一镜头", items=_cut_names)
+    left_last: IntProperty(name="前一镜头结束帧", default=108)
+    candidate_name: StringProperty(name="候选方案", default="相邻切点候选")
+    job_parent: StringProperty(name="任务输出目录", subtype="DIR_PATH")
 
     @classmethod
     def poll(cls, context):
@@ -345,7 +401,7 @@ class CAMERA_WINDOWS_OT_cut_check(bpy.types.Operator):
     def invoke(self, context, event):
         global _cut_items
         try:
-            c.require(not bpy.data.is_dirty, "Save the source before opening this dialog")
+            c.require(not bpy.data.is_dirty, "请先保存当前工程")
             _, _, native = c.load_native()
             self._origin = (context.window.as_pointer(), context.scene.as_pointer(), bpy.data.filepath, c.digest(Path(bpy.data.filepath)))
             self._origin_state = c.canonical_state(native.state(bpy, context.scene))
@@ -357,15 +413,15 @@ class CAMERA_WINDOWS_OT_cut_check(bpy.types.Operator):
             self.job_parent = str(Path(bpy.data.filepath).parent)
             return context.window_manager.invoke_props_dialog(self, width=560)
         except Exception as exc:
-            self.report({"ERROR"}, str(exc))
+            self.report({"ERROR"}, _display_problem(exc))
             return {"CANCELLED"}
 
     def draw(self, context):
         layout = self.layout
         for field in ("left", "left_last", "candidate_name", "job_parent"): layout.prop(self, field)
-        layout.label(text="Right shot begins on the following frame.")
-        layout.label(text="Only this boundary changes; actor and camera animation stays intact.")
-        layout.label(text="CHECK is read-only. Create saves a new verified copy.")
+        layout.label(text="下一镜头从紧接的一帧开始。")
+        layout.label(text="仅调整所选切点。")
+        layout.label(text="检查通过后可另存核验副本。")
 
     def execute(self, context):
         try:
@@ -382,19 +438,19 @@ class CAMERA_WINDOWS_OT_cut_check(bpy.types.Operator):
             _launch("check", {"request": request, "job": str(job)})
             return {"FINISHED"}
         except Exception as exc:
-            self.report({"ERROR"}, str(exc))
+            self.report({"ERROR"}, _display_problem(exc))
             return {"CANCELLED"}
 
 class CAMERA_WINDOWS_OT_dof_check(bpy.types.Operator):
     bl_idname = "camera_windows_static.dof_check"
-    bl_label = "Windows Bone Focus Copy"
+    bl_label = "检查骨骼对焦"
     bl_options = {"REGISTER"}
-    shot: EnumProperty(name="Shot",items=_names)
-    focus_object: StringProperty(name="Focus rig",default="M3.B.Rig")
-    focus_subtarget: StringProperty(name="Focus bone",default="head")
-    fstop: FloatProperty(name="F-stop",default=1.4,min=0.7,max=64.0)
-    candidate_name: StringProperty(name="Candidate",default="B stable shallow focus")
-    job_parent: StringProperty(name="New job parent",subtype="DIR_PATH")
+    shot: EnumProperty(name="镜头",items=_names)
+    focus_object: StringProperty(name="目标骨架",default="M3.B.Rig")
+    focus_subtarget: StringProperty(name="目标骨骼",default="head")
+    fstop: FloatProperty(name="光圈",default=1.4,min=0.7,max=64.0)
+    candidate_name: StringProperty(name="候选方案",default="浅景深候选")
+    job_parent: StringProperty(name="任务输出目录",subtype="DIR_PATH")
 
     @classmethod
     def poll(cls,context):
@@ -403,22 +459,22 @@ class CAMERA_WINDOWS_OT_dof_check(bpy.types.Operator):
     def invoke(self,context,event):
         global _items
         try:
-            c.require(not bpy.data.is_dirty,"Save the source before opening this dialog")
+            c.require(not bpy.data.is_dirty,"请先保存当前工程")
             _,_,native=c.load_native()
             self._origin=(context.window.as_pointer(),context.scene.as_pointer(),bpy.data.filepath,c.digest(Path(bpy.data.filepath)))
             self._origin_state=c.canonical_state(native.state(bpy,context.scene))
-            _items=[(row.name,row.name,"Camera: "+row.camera.name) for row in context.scene.camera_live_shots if row.camera]
+            _items=[(row.name,row.name,"相机："+row.camera.name) for row in context.scene.camera_live_shots if row.camera]
             c.require(bool(_items),"Saved shot sequence required")
             self.shot="B_Responds" if any(row[0]=="B_Responds" for row in _items) else _items[0][0]
             self.job_parent=str(Path(bpy.data.filepath).parent)
             return context.window_manager.invoke_props_dialog(self,width=560)
         except Exception as exc:
-            self.report({"ERROR"},str(exc));return {"CANCELLED"}
+            self.report({"ERROR"}, _display_problem(exc));return {"CANCELLED"}
 
     def draw(self,context):
         for field in ("shot","focus_object","focus_subtarget","fstop","candidate_name","job_parent"):self.layout.prop(self,field)
-        self.layout.label(text="Existing rig bone focus; actor animation and camera pose are retained.")
-        self.layout.label(text="CHECK is read-only. Create saves a new verified copy.")
+        self.layout.label(text="将现有骨架的指定骨骼设为焦点。")
+        self.layout.label(text="检查通过后可另存核验副本。")
 
     def execute(self,context):
         try:
@@ -434,19 +490,19 @@ class CAMERA_WINDOWS_OT_dof_check(bpy.types.Operator):
             _launch("check",{"request":request,"job":str(job)})
             return {"FINISHED"}
         except Exception as exc:
-            self.report({"ERROR"},str(exc));return {"CANCELLED"}
+            self.report({"ERROR"}, _display_problem(exc));return {"CANCELLED"}
 
 class CAMERA_WINDOWS_OT_motion_check(bpy.types.Operator):
     bl_idname = "camera_windows_static.motion_check"
-    bl_label = "Windows Existing Camera Motion Copy"
+    bl_label = "检查运镜节奏"
     bl_options = {"REGISTER"}
-    shot: EnumProperty(name="Shot", items=_names)
-    easing: EnumProperty(name="Motion timing", items=[
-        ("EASE_OUT", "Move then settle", "Begin moving immediately, then slow to a stop"),
-        ("EASE_IN_OUT", "Ease in and out", "Gradually start and stop"),
-        ("EASE_IN", "Gradually accelerate", "Start gently and remain moving at the end")], default="EASE_OUT")
-    candidate_name: StringProperty(name="Candidate", default="Resolve move then settle")
-    job_parent: StringProperty(name="New job parent", subtype="DIR_PATH")
+    shot: EnumProperty(name="镜头", items=_names)
+    easing: EnumProperty(name="运镜时间", items=[
+        ("EASE_OUT", "缓出", "起步后逐渐减速停下"),
+        ("EASE_IN_OUT", "缓入缓出", "逐渐启动，再减速停下"),
+        ("EASE_IN", "缓入", "平缓起步，结束时仍保持运动")], default="EASE_OUT")
+    candidate_name: StringProperty(name="候选方案", default="运镜节奏候选")
+    job_parent: StringProperty(name="任务输出目录", subtype="DIR_PATH")
 
     @classmethod
     def poll(cls, context):
@@ -455,25 +511,25 @@ class CAMERA_WINDOWS_OT_motion_check(bpy.types.Operator):
     def invoke(self, context, event):
         global _items
         try:
-            c.require(not bpy.data.is_dirty, "Save the source before opening this dialog")
+            c.require(not bpy.data.is_dirty, "请先保存当前工程")
             _, _, native = c.load_native()
             self._origin = (context.window.as_pointer(), context.scene.as_pointer(), bpy.data.filepath, c.digest(Path(bpy.data.filepath)))
             self._origin_state = c.canonical_state(native.state(bpy, context.scene))
-            _items = [(row.name, row.name, "Camera: " + row.camera.name) for row in context.scene.camera_live_shots if row.camera]
+            _items = [(row.name, row.name, "相机：" + row.camera.name) for row in context.scene.camera_live_shots if row.camera]
             c.require(bool(_items), "Saved shot sequence required")
             self.shot = "Resolve" if any(row[0] == "Resolve" for row in _items) else _items[0][0]
             self.job_parent = str(Path(bpy.data.filepath).parent)
             return context.window_manager.invoke_props_dialog(self, width=560)
         except Exception as exc:
-            self.report({"ERROR"}, str(exc))
+            self.report({"ERROR"}, _display_problem(exc))
             return {"CANCELLED"}
 
     def draw(self, context):
         for field in ("shot", "easing", "candidate_name", "job_parent"):
             self.layout.prop(self, field)
-        self.layout.label(text="Keep the existing endpoint frames and positions.")
-        self.layout.label(text="Only qualified two-key camera timing changes.")
-        self.layout.label(text="CHECK is read-only. Create saves a verified copy.")
+        self.layout.label(text="沿用现有起止帧与位置。")
+        self.layout.label(text="支持双关键帧相机的节奏调整。")
+        self.layout.label(text="检查通过后可另存核验副本。")
 
     def execute(self, context):
         try:
@@ -490,19 +546,19 @@ class CAMERA_WINDOWS_OT_motion_check(bpy.types.Operator):
             _launch("check", {"request": request, "job": str(job)})
             return {"FINISHED"}
         except Exception as exc:
-            self.report({"ERROR"}, str(exc))
+            self.report({"ERROR"}, _display_problem(exc))
             return {"CANCELLED"}
 
 class CAMERA_WINDOWS_OT_focus_check(bpy.types.Operator):
     bl_idname = "camera_windows_static.focus_check"
-    bl_label = "Windows Existing Focus Timing Copy"
+    bl_label = "检查焦点转移"
     bl_options = {"REGISTER"}
-    shot: EnumProperty(name="Shot", items=_names)
-    helper: StringProperty(name="Existing focus helper", default="M3.A.FocusHelper")
-    new_start: IntProperty(name="New transfer start", default=83)
-    locked_frames: IntVectorProperty(name="Locked first / arrival / last", size=3, default=(73, 97, 108))
-    candidate_name: StringProperty(name="Candidate", default="A later focus timing verification")
-    job_parent: StringProperty(name="New job parent", subtype="DIR_PATH")
+    shot: EnumProperty(name="镜头", items=_names)
+    helper: StringProperty(name="已有对焦控制器", default="M3.A.FocusHelper")
+    new_start: IntProperty(name="转移开始帧", default=83)
+    locked_frames: IntVectorProperty(name="锁定起点／到达／终点帧", size=3, default=(73, 97, 108))
+    candidate_name: StringProperty(name="候选方案", default="焦点转移候选")
+    job_parent: StringProperty(name="任务输出目录", subtype="DIR_PATH")
 
     @classmethod
     def poll(cls, context):
@@ -511,25 +567,25 @@ class CAMERA_WINDOWS_OT_focus_check(bpy.types.Operator):
     def invoke(self, context, event):
         global _items
         try:
-            c.require(not bpy.data.is_dirty, "Save the source before opening this dialog")
+            c.require(not bpy.data.is_dirty, "请先保存当前工程")
             _, _, native = c.load_native()
             self._origin = (context.window.as_pointer(), context.scene.as_pointer(), bpy.data.filepath, c.digest(Path(bpy.data.filepath)))
             self._origin_state = c.canonical_state(native.state(bpy, context.scene))
-            _items = [(row.name, row.name, "Camera: " + row.camera.name) for row in context.scene.camera_live_shots if row.camera]
+            _items = [(row.name, row.name, "相机：" + row.camera.name) for row in context.scene.camera_live_shots if row.camera]
             c.require(bool(_items), "Saved shot sequence required")
             self.shot = "A_Signals" if any(row[0] == "A_Signals" for row in _items) else _items[0][0]
             self.job_parent = str(Path(bpy.data.filepath).parent)
             return context.window_manager.invoke_props_dialog(self, width=580)
         except Exception as exc:
-            self.report({"ERROR"}, str(exc))
+            self.report({"ERROR"}, _display_problem(exc))
             return {"CANCELLED"}
 
     def draw(self, context):
         for field in ("shot", "helper", "new_start", "locked_frames", "candidate_name", "job_parent"):
             self.layout.prop(self, field)
-        self.layout.label(text="Move only the existing focus-transfer start.")
-        self.layout.label(text="Keep arrival, outer keys, optics and actor animation.")
-        self.layout.label(text="CHECK is read-only. Create saves a new verified copy.")
+        self.layout.label(text="只调整已有的焦点转移开始帧。")
+        self.layout.label(text="沿用现有到达帧、外围关键帧与光学设置。")
+        self.layout.label(text="检查通过后可另存核验副本。")
 
     def execute(self, context):
         try:
@@ -546,23 +602,23 @@ class CAMERA_WINDOWS_OT_focus_check(bpy.types.Operator):
             _launch("check", {"request": request, "job": str(job)})
             return {"FINISHED"}
         except Exception as exc:
-            self.report({"ERROR"}, str(exc))
+            self.report({"ERROR"}, _display_problem(exc))
             return {"CANCELLED"}
 
 class CAMERA_WINDOWS_OT_production_check(bpy.types.Operator):
     bl_idname = "camera_windows_static.production_check"
-    bl_label = "Retime Camera Group Copy"
+    bl_label = "检查相机组改时"
     bl_options = {"REGISTER"}
-    collection: StringProperty(name="Camera collection")
-    action_names: StringProperty(name="Actions (comma separated)")
-    marker_names: StringProperty(name="Camera markers (comma separated)")
-    source_start: IntProperty(name="Original first frame", default=1)
-    source_end: IntProperty(name="Original end (exclusive)", default=289)
-    target_start: IntProperty(name="New first frame", default=1)
-    target_end: IntProperty(name="New end (exclusive)", default=361)
-    locked_frames: StringProperty(name="Fixed scene frames", default="1")
-    candidate_name: StringProperty(name="Candidate", default="Retimed camera group")
-    job_parent: StringProperty(name="New job parent", subtype="DIR_PATH")
+    collection: StringProperty(name="相机集合")
+    action_names: StringProperty(name="动作（逗号分隔）")
+    marker_names: StringProperty(name="相机标记（逗号分隔）")
+    source_start: IntProperty(name="原始开始帧", default=1)
+    source_end: IntProperty(name="原始结束边界", default=289)
+    target_start: IntProperty(name="新开始帧", default=1)
+    target_end: IntProperty(name="新结束边界", default=361)
+    locked_frames: StringProperty(name="锁定帧", default="1")
+    candidate_name: StringProperty(name="候选方案", default="相机组改时候选")
+    job_parent: StringProperty(name="任务输出目录", subtype="DIR_PATH")
 
     @classmethod
     def poll(cls, context):
@@ -597,15 +653,15 @@ class CAMERA_WINDOWS_OT_production_check(bpy.types.Operator):
             self.job_parent = str(Path(bpy.data.filepath).parent)
             return context.window_manager.invoke_props_dialog(self, width=620)
         except Exception as exc:
-            self.report({"ERROR"}, str(exc))
+            self.report({"ERROR"}, _display_problem(exc))
             return {"CANCELLED"}
 
     def draw(self, context):
         for field in ("collection", "action_names", "marker_names", "source_start", "source_end",
                       "target_start", "target_end", "locked_frames", "candidate_name", "job_parent"):
             self.layout.prop(self, field)
-        self.layout.label(text="Retimes the named camera actions and markers into a new copy.")
-        self.layout.label(text="Existing performances stay at their original scene times.")
+        self.layout.label(text="在副本中调整指定相机动作和时间线标记。")
+        self.layout.label(text="角色表演沿用现有场景时间。")
 
     def execute(self, context):
         try:
@@ -638,13 +694,13 @@ class CAMERA_WINDOWS_OT_production_check(bpy.types.Operator):
             _launch("check", {"request": request, "job": str(job)})
             return {"FINISHED"}
         except Exception as exc:
-            self.report({"ERROR"}, str(exc))
+            self.report({"ERROR"}, _display_problem(exc))
             return {"CANCELLED"}
 
 
 class CAMERA_WINDOWS_OT_create(bpy.types.Operator):
     bl_idname = "camera_windows_static.create"
-    bl_label = "Create Verified Camera Copy"
+    bl_label = "生成核验副本"
     @classmethod
     def poll(cls, context): return _idle() and _slot["ready"] is not None
     def execute(self, context):
@@ -654,12 +710,12 @@ class CAMERA_WINDOWS_OT_create(bpy.types.Operator):
             _launch("apply", {"job": ready["job"], "check_sha": ready["check"]["sha256"]})
             return {"FINISHED"}
         except Exception as exc:
-            self.report({"ERROR"}, str(exc))
+            self.report({"ERROR"}, _display_problem(exc))
             return {"CANCELLED"}
 
 class CAMERA_WINDOWS_OT_cancel(bpy.types.Operator):
     bl_idname = "camera_windows_static.cancel"
-    bl_label = "Cancel / Release CHECK"
+    bl_label = "取消核验"
     @classmethod
     def poll(cls, context): return _slot["ready"] is not None
     def execute(self, context):
@@ -670,12 +726,12 @@ class CAMERA_WINDOWS_OT_cancel(bpy.types.Operator):
             else: _slot["status"] = "Cancellation requested" if result["accepted"] else "Commit already won; awaiting final verification"
             return {"FINISHED"}
         except Exception as exc:
-            self.report({"ERROR"}, str(exc))
+            self.report({"ERROR"}, _display_problem(exc))
             return {"CANCELLED"}
 
 class CAMERA_WINDOWS_OT_open(bpy.types.Operator):
     bl_idname = "camera_windows_static.open_verified"
-    bl_label = "Open Verified Static Copy"
+    bl_label = "打开核验副本"
     @classmethod
     def poll(cls, context): return _idle() and _slot["terminal"] is not None
     def invoke(self, context, event): return context.window_manager.invoke_confirm(self, event)
@@ -689,40 +745,39 @@ class CAMERA_WINDOWS_OT_open(bpy.types.Operator):
             _slot.update(status="Opened verified copy; native edits may be saved and recaptured", terminal=None, request=None)
             return {"FINISHED"}
         except Exception as exc:
-            self.report({"ERROR"}, str(exc))
+            self.report({"ERROR"}, _display_problem(exc))
             return {"CANCELLED"}
 
-class CAMERA_WINDOWS_PT_static(bpy.types.Panel):
-    bl_label = "Windows Camera Copy"
-    bl_idname = "CAMERA_WINDOWS_PT_static"
-    bl_space_type = "VIEW_3D"
-    bl_region_type = "UI"
-    bl_category = "Camera Live"
-    def draw(self, context):
-        layout = self.layout
-        layout.label(text=_slot["status"])
-        layout.operator("camera_windows_static.check", text="Check Static Camera Copy")
-        layout.operator("camera_windows_static.cut_check", text="Check Adjacent Cut Copy")
-        layout.operator("camera_windows_static.dof_check", text="Check Bone Focus Copy")
-        layout.operator("camera_windows_static.motion_check", text="Check Camera Motion Copy")
-        layout.operator("camera_windows_static.focus_check", text="Check Focus Timing Copy")
-        layout.operator("camera_windows_static.production_check", text="Retime Camera Group Copy")
-        layout.operator("camera_windows_static.diagnose")
-        if _slot.get("framing_summary"):
-            layout.label(text=_slot["framing_summary"])
-            layout.operator("camera_windows_static.check_framing")
-        layout.operator("camera_windows_static.create", text="Create Verified Copy")
-        layout.operator("camera_windows_static.cancel", text="Cancel / Release CHECK")
-        layout.operator("camera_windows_static.open_verified", text="Open Verified Copy")
-        if _slot["job"]:
-            layout.label(text="Job: " + Path(_slot["job"]).name)
-        if _slot["error"]:
-            for start in range(0, min(len(_slot["error"]), 360), 48): layout.label(text=_slot["error"][start:start + 48], icon="ERROR" if start == 0 else "NONE")
+def draw_copy_controls(layout, context):
+    from .artist_ui import _ICONS, status_banner
+
+    layout.operator("camera_windows_static.check", text="检查静态机位")
+    layout.operator("camera_windows_static.cut_check", text="检查相邻切点")
+    layout.operator("camera_windows_static.focus_check", text="检查焦点转移")
+    layout.operator("camera_windows_static.production_check", text="检查相机组改时")
+    layout.operator("camera_windows_static.diagnose", text="诊断已保存的构图")
+    if _slot.get("framing_summary"):
+        layout.label(text=_slot["framing_summary"])
+        layout.operator("camera_windows_static.check_framing", text="核验构图建议")
+    row = layout.row(align=True)
+    row.operator("camera_windows_static.create", text="生成副本")
+    row.operator("camera_windows_static.cancel", text="取消核验")
+    layout.operator("camera_windows_static.open_verified", text="打开已核验副本")
+    if _slot["job"]:
+        layout.label(text="任务 " + Path(_slot["job"]).name)
+    if _slot.get("process"):
+        status_banner(layout, context, "正在后台核验镜头副本", kind="RUNNING", icon_pack=_ICONS)
+    elif _slot.get("ready"):
+        status_banner(layout, context, "检查通过，可以生成副本", kind="OK", icon_pack=_ICONS)
+    elif _slot.get("terminal"):
+        status_banner(layout, context, "副本已就绪", kind="OK", icon_pack=_ICONS)
+    if _slot["error"]:
+        status_banner(layout, context, _display_problem(_slot["error"]), kind="ERROR", icon_pack=_ICONS)
 
 CLASSES = (CAMERA_WINDOWS_OT_check, CAMERA_WINDOWS_OT_cut_check, CAMERA_WINDOWS_OT_dof_check, CAMERA_WINDOWS_OT_motion_check,
            CAMERA_WINDOWS_OT_focus_check, CAMERA_WINDOWS_OT_production_check, CAMERA_WINDOWS_OT_diagnose,
            CAMERA_WINDOWS_OT_check_framing, CAMERA_WINDOWS_OT_create, CAMERA_WINDOWS_OT_cancel,
-           CAMERA_WINDOWS_OT_open, CAMERA_WINDOWS_PT_static)
+           CAMERA_WINDOWS_OT_open)
 
 def register():
     c.require(not _registered, "Windows static adapter already registered")

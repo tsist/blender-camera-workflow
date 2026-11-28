@@ -12,10 +12,8 @@ import uuid
 
 REGISTRY_NAME = '_camera_live_saved_copy_registry_v1'
 REGISTRY_MARKER = 'camera-live/private-saved-copy/1'
-BLENDER_SHA = 'c2fd82553c979a7f6ba85202c487aa1173c90db588a67d74d70cc7b0c2bea01c'
-PYTHON_SHA = '940551e8051d3daf320c30b9671e3fefe079b471f1a57a9d4b77466560b30043'
-RUNTIME_MANIFEST_SHA = '99c12cc7c97081f9a9dbf0c91e83d6c98b0bc6442241c61fd2e54e5036bdc76d'
-LAUNCHER_SHA = '4ebb0fbd39d48f065ec3cc677227af47ea2780a99e3a1057e01c2aeff9bf9f6c'
+RUNTIME_MANIFEST_SHA = '5d9acb0a5305cb874a4a037278953d53f1134c9269853004598b1939c7f64c74'
+LAUNCHER_SHA = '406f9a9f39db50153ceb94e4a40cd0de0e7f0219d0c00d56b74ff268eb263554'
 REQUEST_KEYS = {'source_path','source_sha','candidate_path','candidate_sha','output_directory','blender_path'}
 CHUNK = 1024 * 1024
 
@@ -44,7 +42,8 @@ def clean(path,directory=False):
     p=Path(path)
     if not p.is_absolute() or '..' in p.parts:raise ValueError('Absolute non-traversing path required')
     for part in (p,*p.parents):
-        if stat.S_ISLNK(part.lstat().st_mode):raise ValueError('Symlink path refused')
+        if part.lstat().st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT:
+            raise ValueError('Reparse path refused')
     mode=p.stat().st_mode
     if not (stat.S_ISDIR(mode) if directory else stat.S_ISREG(mode)):raise ValueError('Unexpected path type')
     return p
@@ -83,12 +82,18 @@ def preflight(request,addon_dir):
         if not re.fullmatch('[0-9a-f]{64}',request[key]):raise ValueError('Invalid input SHA')
     if Path(request['source_path']).suffix.lower()!='.blend':raise ValueError('Saved .blend source required')
     output=new_output(request['output_directory']);addon=clean(addon_dir,True)
-    binary=clean(request['blender_path']);python=clean(binary.parent/'5.2/python/bin/python3.13')
-    if binary.name!='blender' or sys.platform!='linux':raise ValueError('Only official Linux Blender 5.2.1 is qualified')
+    if sys.platform != 'win32':
+        raise ValueError('Only qualified Windows Blender 5.3.0 is supported')
+    import bpy
+    binary=clean(request['blender_path'])
+    if tuple(bpy.app.version) < (5, 3, 0) or not binary.samefile(bpy.app.binary_path):
+        raise ValueError('Use the current Windows Blender 5.3.0 or later')
+    version='.'.join(map(str,bpy.app.version[:2]))
+    python=clean(binary.parent / version / 'python/bin/python.exe')
     runtime=clean(addon/'_runtime',True);manifest=runtime/'RUNTIME-PINS.json';launcher=addon/'copy_launcher.py'
     pins,raw=read_json(manifest)
     if sha(raw)!=RUNTIME_MANIFEST_SHA or type(pins)is not dict or len(pins)!=11:raise ValueError('Frozen runtime manifest differs')
-    checks=[(binary,BLENDER_SHA,1024*CHUNK),(python,PYTHON_SHA,1024*CHUNK),
+    checks=[(binary,None,1024*CHUNK),(python,None,1024*CHUNK),
             (Path(request['source_path']),request['source_sha'],256*CHUNK),
             (Path(request['candidate_path']),request['candidate_sha'],CHUNK),
             (manifest,RUNTIME_MANIFEST_SHA,CHUNK),(launcher,LAUNCHER_SHA,CHUNK)]
@@ -108,7 +113,7 @@ def preflight(request,addon_dir):
                 if count>limit:raise ValueError('Input grew')
                 h.update(raw)
                 yield 'Checking '+path.name
-        if identity(path)!=before or h.hexdigest()!=expected:raise ValueError('Input identity/SHA differs: '+str(path))
+        if identity(path)!=before or (expected is not None and h.hexdigest()!=expected):raise ValueError('Input identity/SHA differs: '+str(path))
         identities[str(path)]=before
     new_output(str(output))
     return {'request':request,'identities':identities,'python':str(python),'launcher':str(launcher),'runtime':str(runtime)}
@@ -136,7 +141,7 @@ def submit(prepared):
         env=dict(os.environ);env.pop('PYTHONPATH',None);env.pop('PYTHONHOME',None)
         with (control/'launcher.log').open('xb') as log:
             process=subprocess.Popen([prepared['python'],'-I','-B',prepared['launcher'],str(control/'request.json'),slot.request_sha],
-                stdin=subprocess.DEVNULL,stdout=log,stderr=subprocess.STDOUT,start_new_session=True,env=env,cwd=str(control))
+                stdin=subprocess.DEVNULL,stdout=log,stderr=subprocess.STDOUT,creationflags=subprocess.CREATE_NO_WINDOW,env=env,cwd=str(control))
             slot.process=process  # Retain immediately, including across addon unregister/re-register.
         slot.status='Running independently'
     except Exception as exc:

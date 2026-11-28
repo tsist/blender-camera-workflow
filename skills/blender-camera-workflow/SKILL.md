@@ -7,6 +7,8 @@ metadata:
 
 # 镜头与相机工作流
 
+保存工程可用 `blenderctl camera motion --params FILE` 生成程序化运镜或诊断指定帧的构图。生成请求带源 SHA-256、具名相机配方、外部 FILE 图像指纹与新输出路径。冷开回执核对代表帧矩阵、焦距和焦平面。既有 Camera 0.8.3 作业沿用 `camera copy-083` 及原作业目录。
+
 本技能管排定全片镜头表、架设机位焦段与运镜焦点、做构图诊断和候选 A/B 比较，并在实体视口连续播放分镜预演。归属[镜头与灯光部门](https://github.com/tsist/blender-ai-workflow/blob/main/skills/blender-work-methodology/references/departments/camera-lighting.md)；跨部门排期看[项目协作方法](https://github.com/tsist/blender-ai-workflow/blob/main/skills/blender-work-methodology/SKILL.md)，命令行与副本规范看[Blender CLI 手册](https://github.com/tsist/blenderctl/blob/main/skills/blender-cli/SKILL.md)。
 
 ## 怎么做

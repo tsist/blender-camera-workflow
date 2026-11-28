@@ -10,7 +10,7 @@ import uuid
 VERSION = "0.88.0"
 SCHEMA = "1.0"
 ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_BLENDER = ROOT / "runtime/blender/releases/5.2.1/blender-5.2.1-windows-x64/blender.exe"
+DEFAULT_BLENDER = ROOT / "runtime/blender/releases/5.3.0/blender-5.3.0-windows-x64/blender.exe"
 DEFAULT_JOBS = ROOT / "runtime/blenderctl/jobs"
 DEFAULT_TRANSACTIONS = ROOT / "runtime/blenderctl/transactions"
 CODES = {"INVALID_REQUEST": 2, "NOT_FOUND": 3, "CONFLICT": 4,
@@ -27,7 +27,7 @@ COMMANDS = (*COMMANDS, 'project.verify', 'project.prepare_copy')
 OPERATIONS=('resource.init','resource.status','cache.inspect','cache.plan_clean','project.package','doctor.verify_install')
 REVIEWS=('extension.review','extension.approve')
 HOST_COMMANDS=(*HOST_COMMANDS,*REVIEWS)
-COMMANDS=(*COMMANDS,*REVIEWS,'sculpt.review','sculpt.replay')
+COMMANDS=(*COMMANDS,*REVIEWS)
 HOST_COMMANDS=(*HOST_COMMANDS,*OPERATIONS)
 COMMANDS=(*COMMANDS,*OPERATIONS)
 COMMANDS=(*COMMANDS,'material.run','material.template-save','material.batch','material.study')
@@ -251,10 +251,7 @@ def validate(request):
     if command=='material.template-save':
         from material_workflow_contract import normalize_template_save_params
         return {'schema_version':SCHEMA,'command':command,'params':normalize_template_save_params(params)}
-    if command=='sculpt.replay':
-        from sculpt_contract import normalize
-        return {'schema_version':SCHEMA,'command':command,'params':normalize(params)}
-    if command in (*REVIEWS,'sculpt.review'):
+    if command in REVIEWS:
         from review_contract import normalize
         return {'schema_version':SCHEMA,'command':command,'params':normalize(params,command)}
     if command=='extension.run' and 'review_receipt' in params:

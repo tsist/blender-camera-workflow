@@ -18,7 +18,8 @@ def clean(path, directory=False):
     p = Path(path)
     if not p.is_absolute() or '..' in p.parts: raise ValueError('Absolute non-traversing path required')
     for q in (p, *p.parents):
-        if stat.S_ISLNK(q.lstat().st_mode): raise ValueError('Symlink refused: ' + str(q))
+        if q.lstat().st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT:
+            raise ValueError('Reparse path refused: ' + str(q))
     mode = p.stat().st_mode
     if not (stat.S_ISDIR(mode) if directory else stat.S_ISREG(mode)): raise ValueError('Wrong file type')
     return p
@@ -27,7 +28,7 @@ def clean(path, directory=False):
 def read_checked(path, expected, limit=MAX_SOURCE):
     if not isinstance(expected,str) or not re.fullmatch('[0-9a-f]{64}',expected): raise ValueError('Invalid SHA256')
     p=clean(path)
-    fd=os.open(p,os.O_RDONLY | getattr(os,'O_NOFOLLOW',0) | getattr(os,'O_NONBLOCK',0))
+    fd=os.open(p,os.O_RDONLY | os.O_BINARY)
     with os.fdopen(fd,'rb') as f:
         st=os.fstat(f.fileno())
         if not stat.S_ISREG(st.st_mode) or st.st_size>limit: raise ValueError('Input size/type refused')
@@ -39,7 +40,7 @@ def read_checked(path, expected, limit=MAX_SOURCE):
 def exclusive(path, raw):
     """No overwrite/delete. Any partial or replaced output remains for inspection."""
     p=Path(path); clean(p.parent,directory=True)
-    fd=os.open(p,os.O_WRONLY|os.O_CREAT|os.O_EXCL|getattr(os,'O_NOFOLLOW',0),0o600)
+    fd=os.open(p,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_BINARY,0o600)
     with os.fdopen(fd,'wb') as f:
         st=os.fstat(f.fileno()); identity=(st.st_dev,st.st_ino)
         if f.write(raw)!=len(raw): raise OSError('Short write; partial output retained: '+str(p))
@@ -57,14 +58,18 @@ def json_new(path,value):
 def run_child(binary,worker,config,stage,job,expected_config_sha):
     log=job/(stage+'.log'); record={'stage':stage,'waited':False}
     env=dict(os.environ)
-    for key,folder in [('BLENDER_USER_CONFIG','config'),('BLENDER_USER_DATAFILES','datafiles'),('BLENDER_USER_SCRIPTS','scripts')]:
+    env['BLENDER_USER_RESOURCES'] = str(job)
+    for key, folder in (('BLENDER_USER_CONFIG', 'config'), ('BLENDER_USER_DATAFILES', 'datafiles'),
+                        ('BLENDER_USER_SCRIPTS', 'scripts'), ('BLENDER_USER_EXTENSIONS', 'extensions'),
+                        ('TEMP', 'tmp'), ('TMP', 'tmp')):
         directory=job/('blender_'+folder)
         directory.mkdir(mode=0o700,exist_ok=True);clean(directory,directory=True)
         env[key]=str(directory)
     env.pop('PYTHONPATH',None);env.pop('PYTHONHOME',None)
     with log.open('xb') as f:
         child=subprocess.Popen([str(binary),'--background','--factory-startup','--disable-autoexec','--offline-mode','--threads','2',
-            '--python-exit-code','17','--python',str(worker),'--',str(config),stage,expected_config_sha],stdout=f,stderr=subprocess.STDOUT,env=env)
+            '--python-exit-code','17','--python',str(worker),'--',str(config),stage,expected_config_sha],stdin=subprocess.DEVNULL,stdout=f,stderr=subprocess.STDOUT,env=env,
+            creationflags=subprocess.CREATE_NO_WINDOW)
         record['pid']=child.pid
         interrupted=None
         try:
@@ -126,7 +131,7 @@ def apply_saved_candidate(source_path, expected_source_sha, candidate_path, expe
                 if rel not in pins:raise RuntimeError('Unpinned package file')
                 raw=read_checked(str(p),pins[rel],1024*1024);package[rel]=exclusive(job/rel,raw)
         if len([k for k in package if k.startswith('camera_live_rebuilt/')])!=7: raise RuntimeError('Addon layout differs')
-        config={'job':str(job),'source_sha':expected_source_sha,'candidate_sha':expected_candidate_sha,'package':package}
+        config={'job':str(job),'source_directory':str(Path(source_path).parent),'source_sha':expected_source_sha,'candidate_sha':expected_candidate_sha,'package':package}
         config_sha=json_new(job/'job.json',config)
         def check_snapshots():
             read_checked(str(job/'job.json'),config_sha,1024*1024)

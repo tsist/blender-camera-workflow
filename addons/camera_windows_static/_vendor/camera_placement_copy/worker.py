@@ -67,8 +67,8 @@ def main():
     if cold_stage and digest(job/'apply-report.json') != args[3]:
         raise ValueError('Parent-pinned apply report changed')
     import bpy
-    if not bpy.app.background or bpy.data.filepath or tuple(bpy.app.version) != (5, 2, 1):
-        raise ValueError('Fresh Blender5.2.1 required')
+    if not bpy.app.background or bpy.data.filepath or tuple(bpy.app.version) < (5, 3, 0):
+        raise ValueError('Fresh Blender 5.3.0 or later required')
     if '--factory-startup' not in sys.argv or '--disable-autoexec' not in sys.argv or '--offline-mode' not in sys.argv:
         raise ValueError('Required safe flags absent')
     for relative, expected in cfg['package'].items():

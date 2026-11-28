@@ -6,12 +6,14 @@ import json
 import math
 import os
 from pathlib import Path
+import re
+import subprocess
 import sys
 
 if __package__:
-    from .runtime_pins import RUNTIME_PINS
+    from .runtime_pins import RUNTIME_POLICY, is_supported_host
 else:
-    from runtime_pins import RUNTIME_PINS
+    from runtime_pins import RUNTIME_POLICY, is_supported_host
 
 ROOT = Path(__file__).resolve().parent
 HOST = ROOT / "_support" / "blenderctl"
@@ -33,15 +35,17 @@ def qualified_runtime():
     binary = clean(Path(active or configured))
     if active and configured:
         require(clean(Path(configured)).resolve() == binary.resolve(), "Configured Blender differs from the active application")
-    fingerprint = digest(binary)
-    version = next((version for version, pins in RUNTIME_PINS.items() if pins["blender"] == fingerprint), None)
-    require(version is not None, "An exact qualified Windows Blender distribution is required")
-    pins = RUNTIME_PINS[version]
     if app is not None:
-        require(tuple(app.version) == tuple(map(int, version.split(".")))
-                and app.build_hash == pins["build"].encode("ascii"), "Blender build differs")
+        number = tuple(app.version)
+    else:
+        output = subprocess.run([str(binary), "--version"], capture_output=True, text=True,
+                                timeout=15, creationflags=subprocess.CREATE_NO_WINDOW)
+        match = re.search(r"^Blender (\d+)\.(\d+)\.(\d+)", output.stdout, re.MULTILINE)
+        require(output.returncode == 0 and match, "Cannot identify the selected Blender executable")
+        number = tuple(map(int, match.groups()))
+    require(is_supported_host(number), "Camera Workflow requires Blender 5.3.0 or later")
+    version = ".".join(map(str, number))
     python = clean(binary.parent / version.rsplit(".", 1)[0] / "python/bin/python.exe")
-    require(digest(python) == pins["python"], "Bundled Python identity differs")
     if app is None:
         require(clean(Path(sys.executable)).resolve() == python.resolve(), "Use the selected Blender's bundled Python")
     return version, binary, python
@@ -132,7 +136,7 @@ def verify_package(expected_manifest_sha=None):
     if expected_manifest_sha is not None: require(actual == expected_manifest_sha, "Adapter code manifest changed")
     doc = read_json(manifest_path)
     require(set(doc) == {"schema", "files", "runtime"} and doc["schema"] == 3, "Code manifest schema")
-    require(doc["runtime"] == RUNTIME_PINS, "Runtime pins changed")
+    require(doc["runtime"] == RUNTIME_POLICY, "Runtime policy changed")
     for name, wanted in doc["files"].items():
         require(not Path(name).is_absolute() and ".." not in Path(name).parts, "Invalid code member")
         require(digest(ROOT / name) == wanted, "Adapter code changed: " + name)

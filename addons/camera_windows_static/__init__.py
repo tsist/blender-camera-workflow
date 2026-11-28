@@ -1,14 +1,14 @@
 """Windows Camera Workflow with a bundled Camera Live provider."""
-bl_info = {"name": "Camera Workflow Windows", "author": "Camera Workflow contributors",
-           "version": (0, 8, 3), "blender": (5, 2, 1), "location": "3D View > Sidebar > Camera Live",
-           "description": "Review, diagnose and edit a verified copy of a saved camera scene", "category": "Camera"}
+bl_info = {"name": "镜头工作台", "author": "Camera Workflow contributors",
+           "version": (1, 0, 0), "blender": (5, 3, 0), "location": "3D 视口侧栏",
+           "description": "编辑镜头表、预演运镜与核验镜头副本", "category": "Camera"}
 
 _owned_live = None
 
 def register():
     global _owned_live
     import bpy
-    from . import common, ui
+    from . import artist_ui, common, ui
 
     common.verify_package()
     live, _, _ = common.load_native()
@@ -19,7 +19,14 @@ def register():
         live.register()
         _owned_live = live
     try:
+        if _owned_live is live and live.registered_class(live.CLREBUILD_PT_preview) is live.CLREBUILD_PT_preview:
+            bpy.utils.unregister_class(live.CLREBUILD_PT_preview)
         ui.register()
+        try:
+            artist_ui.register()
+        except Exception:
+            ui.unregister()
+            raise
     except Exception:
         if _owned_live is not None:
             _owned_live.unregister()
@@ -28,9 +35,10 @@ def register():
 
 def unregister():
     global _owned_live
-    from . import ui
+    from . import artist_ui, ui
 
     ui.unregister()
+    artist_ui.unregister()
     if _owned_live is not None:
         _owned_live.unregister()
         _owned_live = None

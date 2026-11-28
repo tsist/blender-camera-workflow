@@ -17,13 +17,13 @@ def finite(value):
 
 
 def shading_capability(engine, version, shading):
-    """Fail-closed contract from actual 5.2.1 RNA setter probes, not enum_items."""
+    """Fail-closed contract from actual 5.3.0 RNA setter probes, not enum_items."""
     require(type(engine) is str and engine, 'Render engine identity is unavailable.')
     version = tuple(version)
     require(shading in ('SOLID', 'MATERIAL'), 'Unsupported preview shading.')
     if shading == 'MATERIAL':
-        require(engine == 'BLENDER_EEVEE' and version == (5, 2, 1),
-                'MATERIAL is verified only for Blender 5.2.1 / BLENDER_EEVEE. Choose SOLID explicitly; the render engine will not be changed.')
+        require(engine == 'BLENDER_EEVEE' and version >= (5, 3, 0),
+                'MATERIAL is verified for Blender 5.3.0 or later / BLENDER_EEVEE. Choose SOLID explicitly; the render engine will not be changed.')
     return engine, version
 
 

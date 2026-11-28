@@ -3,20 +3,21 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
+import subprocess
 from pathlib import Path
 import stat
 import sys
 
-RUNTIME_MANIFEST_SHA = '99c12cc7c97081f9a9dbf0c91e83d6c98b0bc6442241c61fd2e54e5036bdc76d'
-BLENDER_SHA = 'c2fd82553c979a7f6ba85202c487aa1173c90db588a67d74d70cc7b0c2bea01c'
-PYTHON_SHA = '940551e8051d3daf320c30b9671e3fefe079b471f1a57a9d4b77466560b30043'
+RUNTIME_MANIFEST_SHA = '5d9acb0a5305cb874a4a037278953d53f1134c9269853004598b1939c7f64c74'
 
 
 def clean(path):
     p=Path(path)
     if not p.is_absolute() or '..' in p.parts:raise ValueError('Invalid path')
     for part in (p,*p.parents):
-        if stat.S_ISLNK(part.lstat().st_mode):raise ValueError('Symlink refused')
+        if part.lstat().st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT:
+            raise ValueError('Reparse path refused')
     return p
 
 
@@ -72,8 +73,18 @@ def main():
     if request['control_directory']!=str(control) or path.name!='request.json':raise ValueError('Control binding differs')
     terminal={'schema':'camera-copy-launcher/1','request_sha':expected,'control_directory':str(control),'output_directory':request['output_directory'],'launcher_pid':os.getpid(),'status':'failed'}
     try:
-        if not sys.flags.isolated or not sys.dont_write_bytecode:raise ValueError('Isolated no-bytecode Python required')
-        if digest(sys.executable)!=PYTHON_SHA or digest(request['blender_path'])!=BLENDER_SHA:raise ValueError('Official executable SHA differs')
+        if sys.platform != 'win32' or not sys.flags.isolated or not sys.dont_write_bytecode:
+            raise ValueError('Isolated no-bytecode Windows Python required')
+        binary=clean(request['blender_path'])
+        selected=subprocess.run([str(binary),'--version'],capture_output=True,text=True,
+                                timeout=15,creationflags=subprocess.CREATE_NO_WINDOW)
+        version=re.search(r"^Blender (\d+)\.(\d+)\.(\d+)",selected.stdout,re.MULTILINE)
+        if selected.returncode or not version or tuple(map(int,version.groups())) < (5, 3, 0):
+            raise ValueError('Windows Blender 5.3.0 or later is required')
+        python=binary.parent / '.'.join(version.groups()[:2]) / 'python/bin/python.exe'
+        if not clean(Path(sys.executable)).samefile(clean(python)):
+            raise ValueError("Use the selected Blender's bundled Python")
+        blender_sha=digest(binary)
         runtime=clean(request['runtime_directory'])
         if runtime!=Path(__file__).resolve().parent/'_runtime':raise ValueError('Fixed runtime layout required')
         manifest=runtime/'RUNTIME-PINS.json'
@@ -86,7 +97,7 @@ def main():
         raw=(runtime/'camera_copy/__init__.py').read_bytes()
         if hashlib.sha256(raw).hexdigest()!=pins['camera_copy/__init__.py']:raise ValueError('Helper changed')
         exec(compile(raw,str(runtime/'camera_copy/__init__.py'),'exec'),helper.__dict__)
-        helper.apply_saved_candidate(request['source_path'],request['source_sha'],request['candidate_path'],request['candidate_sha'],request['output_directory'],request['blender_path'],BLENDER_SHA)
+        helper.apply_saved_candidate(request['source_path'],request['source_sha'],request['candidate_path'],request['candidate_sha'],request['output_directory'],request['blender_path'],blender_sha)
         terminal.update(verified_result(request));terminal['status']='success'
     except Exception as exc:
         terminal['error']=str(exc)

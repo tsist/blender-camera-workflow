@@ -1,33 +1,3 @@
-# Camera Workflow 0.8.3
+# Camera Workflow 1.0 release candidate
 
-Camera Workflow organizes shots and saves verified copies of Blender scenes. The Camera Live sidebar provides shot preview, candidate comparison, framing diagnosis and checks for camera edits.
-
-## Install on Windows
-
-The add-on accepts the official Windows x64 distributions **Blender 5.3.0** build `02f0899d78e3` and **Blender 5.2.1 LTS** build `9e2066aef7ef`. It verifies SHA-256 for Blender and its bundled Python. Run each saved-copy transaction from check through final readback with one Blender version.
-
-1. Download the `camera-workflow-0.8.3.zip` release asset or build it with `python addons/build_camera_zip.py camera-workflow-0.8.3.zip`.
-2. In Blender, open **Edit > Preferences > Add-ons > Install from Disk**, select the ZIP and enable **Camera Workflow Windows**.
-3. Open the **Camera Live** tab in the 3D View sidebar. Work from a saved Blender file.
-
-## Edit and verify
-
-Use **Diagnose Saved Framing** with a JSON specification that names the scene, camera, subjects, sample frames and constraints. A viable camera offset can feed **Check Framing Suggestion Copy**. Use **Check**, **Create Verified Copy**, then **Open Verified Copy** for supported edits.
-
-The panel supports static position and lens changes, adjacent cuts, a named bone focus, simple camera motion easing, focus timing and explicit camera-group retiming. The Graph Editor and camera properties remain available for native fine editing. Framing and collision observations cover the specified subject points, frames and sampled camera paths.
-
-The Blender 5.3 saved-copy qualification covers the bounded camera operations on saved scenes. Choose SOLID for Blender 5.3 camera previews. Existing compositor effects stacks require a stack-aware state witness before camera retiming or strict technical-scene edits can proceed.
-
-## Command line
-
-Run `cli.py` from this add-on directory with Blender's bundled Python and an explicit Blender executable:
-
-```text
-<Blender Python> cli.py --blender <Blender executable> <request.json>
-```
-
-The input has keys `action` and `params`. Supported actions are `diagnose`, `check`, `apply`, `cancel` and `result`. Choose a new job directory and provide the exact saved source path and SHA-256. To use the existing blenderctl extension executor, point its script descriptor at this directory's `cli_bridge.py` and use the same action and params as bridge parameters.
-
-After upgrading the add-on, start a fresh CHECK in a new job directory. Finish transactions created by 0.8.2 with the previous package and Blender 5.2.1.
-
-Camera Workflow is available under GPL-3.0-or-later. See [COPYING](COPYING) and [support notice](SUPPORT-NOTICE.md).
+Windows Blender 5.3.0 build 02f0899d78e3. Includes the Camera Live sequencer, EEVEE material preview, native Windows saved-copy transaction and the editable procedural camera module. CLI workers use the selected Blender and a new output. The native saved-cut command supports relative FILE textures and checks their bytes on independent reopen.

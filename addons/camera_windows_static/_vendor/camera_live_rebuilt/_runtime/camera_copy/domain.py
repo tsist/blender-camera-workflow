@@ -15,7 +15,8 @@ def reject_unpreserved(bpy):
     for key in ('libraries', 'texts', 'sounds', 'movieclips', 'volumes', 'cache_files', 'particles'):
         require(not len(getattr(bpy.data, key, ())), 'unsupported data collection: ' + key)
     for image in bpy.data.images:
-        require(image.source in ('GENERATED', 'VIEWER') and not image.filepath, 'file image unsupported')
+        require(image.source in ('GENERATED','VIEWER') and not image.filepath
+                or image.source == 'FILE' and (bool(image.filepath) or bool(image.packed_file)), 'image source unsupported')
     for font in bpy.data.fonts:
         require(font.filepath == '<builtin>', 'external font unsupported')
     for scene in bpy.data.scenes:
